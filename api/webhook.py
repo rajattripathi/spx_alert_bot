@@ -5,157 +5,144 @@ import urllib.request
 import urllib.parse
 from datetime import datetime
 
-# ─────────────────────────────────────────
-# CONFIG — fill these in before deploying
-# ─────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-# ─────────────────────────────────────────
-# KEY LEVELS & THEIR DESCRIPTIONS
-# ─────────────────────────────────────────
 LEVELS = {
-    # RESISTANCE — puts watch
-    6840: {"type": "RESISTANCE", "label": "Bull/Bear Line",        "bias": "PUTS"},
-    6715: {"type": "RESISTANCE", "label": "Red Band / 1H Resistance", "bias": "PUTS"},
-    6692: {"type": "RESISTANCE", "label": "Broken Support",        "bias": "PUTS"},
-    6658: {"type": "RESISTANCE", "label": "Swing High",            "bias": "PUTS"},
-    # SUPPORT — calls watch
-    6635: {"type": "SUPPORT",    "label": "Daily Support",         "bias": "CALLS"},
-    6600: {"type": "SUPPORT",    "label": "Round Number",          "bias": "CALLS"},
-    6580: {"type": "SUPPORT",    "label": "Daily 200MA 🔴 KEY",    "bias": "CALLS"},
-    6550: {"type": "SUPPORT",    "label": "Midpoint Buffer",       "bias": "CALLS"},
-    6500: {"type": "SUPPORT",    "label": "Weekly 50MA 🔴 MAJOR",  "bias": "CALLS"},
-    6470: {"type": "SUPPORT",    "label": "Breakdown Level",       "bias": "ABORT"},
+    6840: {"type": "RESISTANCE", "label": "Bull/Bear Line",      "bias": "PUTS"},
+    6715: {"type": "RESISTANCE", "label": "Red Band Resistance", "bias": "PUTS"},
+    6692: {"type": "RESISTANCE", "label": "Broken Support",      "bias": "PUTS"},
+    6658: {"type": "RESISTANCE", "label": "Swing High",          "bias": "PUTS"},
+    6635: {"type": "SUPPORT",    "label": "Daily Support",       "bias": "CALLS"},
+    6600: {"type": "SUPPORT",    "label": "Round Number",        "bias": "CALLS"},
+    6580: {"type": "SUPPORT",    "label": "Daily 200MA KEY",     "bias": "CALLS"},
+    6550: {"type": "SUPPORT",    "label": "Midpoint Buffer",     "bias": "CALLS"},
+    6500: {"type": "SUPPORT",    "label": "Weekly 50MA MAJOR",   "bias": "CALLS"},
+    6470: {"type": "SUPPORT",    "label": "Breakdown Level",     "bias": "ABORT"},
 }
 
-# RSI thresholds
-RSI_OVERSOLD  = 32   # calls zone
-RSI_OVERBOUGHT = 65  # puts zone
+RSI_OVERSOLD   = 35
+RSI_OVERBOUGHT = 60
 
 
-def send_telegram(message: str):
-    """Send a message to Telegram."""
+def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram credentials not set")
+        print("Telegram credentials missing")
         return False
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    url  = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = urllib.parse.urlencode({
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
+        "chat_id":    TELEGRAM_CHAT_ID,
+        "text":       message,
         "parse_mode": "HTML",
     }).encode()
     try:
         req = urllib.request.Request(url, data=data, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status == 200
+        with urllib.request.urlopen(req, timeout=10) as r:
+            result = r.read()
+            print(f"Telegram response: {result}")
+            return r.status == 200
     except Exception as e:
         print(f"Telegram error: {e}")
         return False
 
 
-def evaluate_setup(price: float, rsi_5m: float, rsi_1h: float, level: int, level_info: dict) -> dict:
-    """Evaluate if this is an A+ setup."""
-    bias = level_info["bias"]
+def safe_float(val, default=50.0):
+    try:
+        return float(str(val).strip())
+    except Exception:
+        return default
+
+
+def find_closest_level(price):
+    closest = min(LEVELS.keys(), key=lambda l: abs(l - price))
+    if abs(closest - price) <= 20:
+        return closest, LEVELS[closest]
+    return None, None
+
+
+def evaluate_setup(price, rsi_5m, rsi_1h, level, level_info):
+    bias  = level_info["bias"]
     score = 0
-    conditions = []
-    missing = []
+    met   = []
+    miss  = []
 
-    # Condition 1 — Price at level
-    distance = abs(price - level)
-    if distance <= 12:
+    dist = abs(price - level)
+    if dist <= 15:
         score += 1
-        conditions.append(f"✅ Price within 12pts of {level}")
+        met.append(f"Price {dist:.0f}pts from {level}")
     else:
-        missing.append(f"❌ Price {distance:.0f}pts from level")
+        miss.append(f"Price {dist:.0f}pts away from level")
 
-    # Condition 2 — RSI 5M
     if bias == "CALLS" and rsi_5m <= RSI_OVERSOLD:
         score += 1
-        conditions.append(f"✅ 5M RSI oversold: {rsi_5m:.1f}")
+        met.append(f"5M RSI oversold: {rsi_5m:.1f}")
     elif bias == "PUTS" and rsi_5m >= RSI_OVERBOUGHT:
         score += 1
-        conditions.append(f"✅ 5M RSI overbought: {rsi_5m:.1f}")
+        met.append(f"5M RSI overbought: {rsi_5m:.1f}")
     else:
-        missing.append(f"❌ 5M RSI not confirming: {rsi_5m:.1f}")
+        miss.append(f"5M RSI not confirming: {rsi_5m:.1f}")
 
-    # Condition 3 — RSI 1H
-    if bias == "CALLS" and rsi_1h <= 40:
+    if bias == "CALLS" and rsi_1h <= 42:
         score += 1
-        conditions.append(f"✅ 1H RSI low: {rsi_1h:.1f}")
+        met.append(f"1H RSI low: {rsi_1h:.1f}")
     elif bias == "PUTS" and rsi_1h >= 55:
         score += 1
-        conditions.append(f"✅ 1H RSI high: {rsi_1h:.1f}")
+        met.append(f"1H RSI high: {rsi_1h:.1f}")
     else:
-        missing.append(f"⚠️ 1H RSI neutral: {rsi_1h:.1f}")
+        miss.append(f"1H RSI neutral: {rsi_1h:.1f}")
 
-    # Condition 4 — Key level quality
-    if level_info["type"] in ("SUPPORT", "RESISTANCE"):
-        score += 1
-        conditions.append(f"✅ Key level: {level_info['label']}")
+    score += 1
+    met.append(f"Key level: {level_info['label']}")
 
     grade = "NO SETUP"
-    if score == 4:
-        grade = "A+"
-    elif score == 3:
-        grade = "B"
-    elif score == 2:
-        grade = "C"
+    if score == 4:   grade = "A+"
+    elif score == 3: grade = "B"
+    elif score == 2: grade = "C"
 
-    return {
-        "grade": grade,
-        "score": score,
-        "conditions": conditions,
-        "missing": missing,
-        "bias": bias,
-    }
+    return {"grade": grade, "score": score, "met": met, "miss": miss, "bias": bias}
 
 
-def build_message(price: float, rsi_5m: float, rsi_1h: float,
-                  level: int, level_info: dict, setup: dict, alert_name: str) -> str:
-    """Build the Telegram alert message."""
-    now = datetime.now().strftime("%H:%M ET")
-    bias = setup["bias"]
+def build_message(price, rsi_5m, rsi_1h, level, level_info, setup):
+    now   = datetime.now().strftime("%H:%M ET")
     grade = setup["grade"]
+    bias  = setup["bias"]
 
-    # Emoji
-    grade_emoji = {"A+": "🚨", "B": "⚡", "C": "👀", "NO SETUP": "ℹ️"}.get(grade, "ℹ️")
-    bias_emoji  = {"CALLS": "🟢", "PUTS": "🔴", "ABORT": "⛔"}.get(bias, "⚪")
+    icons = {"A+": "🚨", "B": "⚡", "C": "👀", "NO SETUP": "ℹ️"}
+    bemoj = {"CALLS": "🟢", "PUTS": "🔴", "ABORT": "⛔"}
 
-    # Strike suggestion
+    met_text  = "\n".join([f"✅ {c}" for c in setup["met"]])
+    miss_text = "\n".join([f"❌ {c}" for c in setup["miss"]])
+
     strike_hint = ""
-    if bias == "CALLS" and grade == "A+":
-        strike = int(price) - 10
-        strike_hint = f"\n💡 <b>Strike:</b> {strike} calls (ITM)\n💡 <b>Stop:</b> below {level - 20}"
-    elif bias == "PUTS" and grade == "A+":
-        strike = int(price) + 10
-        strike_hint = f"\n💡 <b>Strike:</b> {strike} puts (ITM)\n💡 <b>Stop:</b> above {level + 20}"
+    if grade == "A+" and bias == "CALLS":
+        strike_hint = f"\n💡 Strike: {int(price)-10} calls\n💡 Stop: below {level-20}"
+    elif grade == "A+" and bias == "PUTS":
+        strike_hint = f"\n💡 Strike: {int(price)+10} puts\n💡 Stop: above {level+20}"
 
-    conditions_text = "\n".join(setup["conditions"])
-    missing_text    = "\n".join(setup["missing"]) if setup["missing"] else ""
-
-    msg = f"""{grade_emoji} <b>SPX ALERT — {grade} {bias_emoji} {bias}</b>
-━━━━━━━━━━━━━━━━━━━
-🕐 <b>Time:</b> {now}
-📍 <b>Price:</b> {price:.2f}
-🎯 <b>Level:</b> {level} — {level_info['label']}
-📊 <b>RSI 5M:</b> {rsi_5m:.1f} | <b>RSI 1H:</b> {rsi_1h:.1f}
-━━━━━━━━━━━━━━━━━━━
-<b>CONDITIONS:</b>
-{conditions_text}"""
-
-    if missing_text:
-        msg += f"\n\n<b>MISSING:</b>\n{missing_text}"
-
-    if strike_hint:
-        msg += f"\n━━━━━━━━━━━━━━━━━━━{strike_hint}"
-
+    action = ""
     if grade == "A+":
-        msg += f"\n━━━━━━━━━━━━━━━━━━━\n📸 <b>Screenshot 5M chart</b>\n📤 <b>Send to Claude NOW</b>"
+        action = "\n📸 Screenshot 5M\n📤 Send to Claude NOW"
     elif grade in ("B", "C"):
-        msg += f"\n━━━━━━━━━━━━━━━━━━━\n👀 <b>WATCH — not A+ yet</b>\nWait for candle to CLOSE"
+        action = "\n👀 WATCH — wait for candle close"
     elif bias == "ABORT":
-        msg += f"\n━━━━━━━━━━━━━━━━━━━\n⛔ <b>BREAKDOWN WARNING</b>\nClose any longs immediately"
+        action = "\n⛔ BREAKDOWN — close longs now"
+
+    msg = (
+        f"{icons.get(grade,'ℹ️')} <b>SPX — {grade} {bemoj.get(bias,'')} {bias}</b>\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"🕐 {now}\n"
+        f"📍 Price: {price:.2f}\n"
+        f"🎯 Level: {level} — {level_info['label']}\n"
+        f"📊 RSI 5M: {rsi_5m:.1f} | 1H: {rsi_1h:.1f}\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"{met_text}"
+    )
+    if miss_text:
+        msg += f"\n{miss_text}"
+    if strike_hint:
+        msg += f"\n━━━━━━━━━━━━━━━━{strike_hint}"
+    if action:
+        msg += f"\n━━━━━━━━━━━━━━━━{action}"
 
     return msg
 
@@ -163,70 +150,103 @@ def build_message(price: float, rsi_5m: float, rsi_1h: float,
 class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
-        """Receive webhook from TradingView."""
         try:
-            length  = int(self.headers.get("Content-Length", 0))
-            raw     = self.rfile.read(length)
-            payload = json.loads(raw.decode("utf-8"))
+            length = int(self.headers.get("Content-Length", 0))
+            raw    = self.rfile.read(length)
+            raw_text = raw.decode("utf-8", errors="replace")
+            print(f"Raw payload received: {raw_text}")
 
-            # ── Extract fields from TradingView alert ──
-            # TradingView alert message format (set this in TV alert):
-            # {"price": {{close}}, "rsi_5m": {{plot_0}}, "rsi_1h": {{plot_1}}, "level": 6580, "alert": "{{ticker}} {{close}}"}
-            price      = float(payload.get("price", 0))
-            rsi_5m     = float(payload.get("rsi_5m", 50))
-            rsi_1h     = float(payload.get("rsi_1h", 50))
-            level      = int(payload.get("level", 0))
-            alert_name = str(payload.get("alert", "SPX Alert"))
+            # Parse JSON safely
+            try:
+                payload = json.loads(raw_text)
+            except Exception as je:
+                print(f"JSON parse error: {je}")
+                # Try to send raw alert anyway
+                send_telegram(
+                    f"⚡ <b>SPX Alert Fired</b>\n"
+                    f"Could not parse data\n"
+                    f"Raw: {raw_text[:150]}\n"
+                    f"📸 Check chart manually"
+                )
+                self._respond(200, {"status": "raw_alert_sent"})
+                return
 
-            print(f"Received: price={price} rsi_5m={rsi_5m} rsi_1h={rsi_1h} level={level}")
+            print(f"Parsed: {payload}")
 
-            # Find matching level
-            level_info = LEVELS.get(level)
-            if not level_info:
-                # Find closest level within 15 points
-                closest = min(LEVELS.keys(), key=lambda l: abs(l - price))
-                if abs(closest - price) <= 15:
-                    level      = closest
-                    level_info = LEVELS[closest]
-                else:
-                    level_info = {"type": "UNKNOWN", "label": "Unknown Level", "bias": "WATCH"}
+            # Extract price flexibly
+            price = safe_float(
+                payload.get("price") or
+                payload.get("close") or
+                payload.get("last") or
+                payload.get("p") or 0, 0
+            )
 
-            # Evaluate setup quality
-            setup = evaluate_setup(price, rsi_5m, rsi_1h, level, level_info)
+            # Extract RSI
+            rsi_5m = safe_float(payload.get("rsi_5m") or payload.get("rsi") or 50, 50)
+            rsi_1h = safe_float(payload.get("rsi_1h") or 50, 50)
 
-            # Only alert for A+, B, or ABORT
-            if setup["grade"] in ("A+", "B") or level_info["bias"] == "ABORT":
-                message = build_message(price, rsi_5m, rsi_1h, level, level_info, setup, alert_name)
-                send_telegram(message)
-                print(f"Alert sent: {setup['grade']}")
+            # Extract level
+            level = int(safe_float(payload.get("level") or 0, 0))
+
+            print(f"price={price} rsi_5m={rsi_5m} rsi_1h={rsi_1h} level={level}")
+
+            # If no price send basic alert
+            if price == 0:
+                send_telegram(
+                    f"⚡ <b>SPX Alert Fired</b>\n"
+                    f"Price not found in payload\n"
+                    f"Data: {str(payload)[:150]}\n"
+                    f"📸 Check chart manually"
+                )
+                self._respond(200, {"status": "basic_alert_sent"})
+                return
+
+            # Find level
+            if not level or level not in LEVELS:
+                level, level_info = find_closest_level(price)
             else:
-                print(f"No alert — grade: {setup['grade']}")
+                level_info = LEVELS.get(level)
 
-            # Respond to TradingView
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({
-                "status": "ok",
-                "grade": setup["grade"],
-                "bias": setup["bias"],
-            }).encode())
+            if not level or not level_info:
+                send_telegram(
+                    f"📍 <b>SPX Price Alert</b>\n"
+                    f"Price: {price:.2f}\n"
+                    f"Not at key level\n"
+                    f"RSI 5M: {rsi_5m:.1f}\n"
+                    f"👀 Watch chart"
+                )
+                self._respond(200, {"status": "ok", "note": "no_level"})
+                return
+
+            # Evaluate and send
+            setup = evaluate_setup(price, rsi_5m, rsi_1h, level, level_info)
+            msg   = build_message(price, rsi_5m, rsi_1h, level, level_info, setup)
+            send_telegram(msg)
+
+            self._respond(200, {"status": "ok", "grade": setup["grade"]})
 
         except Exception as e:
             print(f"Error: {e}")
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode())
+            import traceback
+            traceback.print_exc()
+            try:
+                send_telegram(f"⚠️ Bot Error\n{str(e)[:100]}\n📸 Check chart manually")
+            except Exception:
+                pass
+            self._respond(500, {"error": str(e)})
 
     def do_GET(self):
-        """Health check endpoint."""
-        self.send_response(200)
+        self._respond(200, {
+            "status":              "SPX Alert Bot running",
+            "levels_watching":     list(LEVELS.keys()),
+            "telegram_configured": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+        })
+
+    def _respond(self, code, data):
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({
-            "status": "SPX Alert Bot running",
-            "levels_watching": list(LEVELS.keys()),
-        }).encode())
+        self.wfile.write(json.dumps(data).encode())
 
     def log_message(self, format, *args):
         print(f"[{self.address_string()}] {format % args}")
